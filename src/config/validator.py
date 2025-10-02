@@ -411,10 +411,10 @@ class ConfigValidator:
             ))
 
         # Check warmup epochs vs total epochs
-        if config.optimizer.scheduler_warmup_epochs > config.training.epochs:
+        if config.optimizer.warmup_epochs > config.training.epochs:
             self.errors.append(ValidationError(
-                "optimizer.scheduler_warmup_epochs",
-                f"Warmup epochs ({config.optimizer.scheduler_warmup_epochs}) exceeds total epochs ({config.training.epochs})"
+                "optimizer.warmup_epochs",
+                f"Warmup epochs ({config.optimizer.warmup_epochs}) exceeds total epochs ({config.training.epochs})"
             ))
 
     def _validate_gpu_compatibility(self, config: WakewordConfig):

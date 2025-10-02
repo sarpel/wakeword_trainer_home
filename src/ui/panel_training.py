@@ -317,6 +317,9 @@ def start_training(config_state: Dict) -> Tuple:
             'rir_prob': config.augmentation.rir_prob
         }
 
+        # Normalize feature type name
+        feature_type = 'mel' if config.data.feature_type == 'mel_spectrogram' else config.data.feature_type
+
         train_ds, val_ds, test_ds = load_dataset_splits(
             splits_dir=splits_dir,
             sample_rate=config.data.sample_rate,
@@ -324,7 +327,12 @@ def start_training(config_state: Dict) -> Tuple:
             augment_train=True,
             augmentation_config=aug_config,
             data_root=Path("data"),
-            device='cuda'
+            device='cuda',
+            feature_type=feature_type,
+            n_mels=config.data.n_mels,
+            n_mfcc=config.data.n_mfcc,
+            n_fft=config.data.n_fft,
+            hop_length=config.data.hop_length
         )
 
         training_state.add_log(f"Loaded {len(train_ds)} training samples")
@@ -335,18 +343,18 @@ def start_training(config_state: Dict) -> Tuple:
             train_ds,
             batch_size=config.training.batch_size,
             shuffle=True,
-            num_workers=config.data.num_workers,
+            num_workers=config.training.num_workers,
             pin_memory=True,
-            persistent_workers=True if config.data.num_workers > 0 else False
+            persistent_workers=True if config.training.num_workers > 0 else False
         )
 
         training_state.val_loader = DataLoader(
             val_ds,
             batch_size=config.training.batch_size,
             shuffle=False,
-            num_workers=config.data.num_workers,
+            num_workers=config.training.num_workers,
             pin_memory=True,
-            persistent_workers=True if config.data.num_workers > 0 else False
+            persistent_workers=True if config.training.num_workers > 0 else False
         )
 
         training_state.total_batches = len(training_state.train_loader)
@@ -429,6 +437,9 @@ def stop_training() -> str:
 
 def get_training_status() -> Tuple:
     """Get current training status for live updates"""
+    # Close old matplotlib figures to prevent memory leak
+    plt.close('all')
+
     # Collect logs
     logs = ""
     while not training_state.log_queue.empty():

@@ -150,7 +150,13 @@ class Trainer:
             leave=False
         )
 
-        for batch_idx, (inputs, targets) in enumerate(pbar):
+        for batch_idx, batch in enumerate(pbar):
+            # Unpack batch (handles both 2 and 3 value returns)
+            if len(batch) == 3:
+                inputs, targets, _ = batch  # Ignore metadata
+            else:
+                inputs, targets = batch
+
             # Move to device
             inputs = inputs.to(self.device, non_blocking=True)
             targets = targets.to(self.device, non_blocking=True)
@@ -233,7 +239,13 @@ class Trainer:
         )
 
         with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(pbar):
+            for batch_idx, batch in enumerate(pbar):
+                # Unpack batch (handles both 2 and 3 value returns)
+                if len(batch) == 3:
+                    inputs, targets, _ = batch  # Ignore metadata
+                else:
+                    inputs, targets = batch
+
                 # Move to device
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)

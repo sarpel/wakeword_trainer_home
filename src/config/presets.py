@@ -138,7 +138,7 @@ def get_large_dataset_preset() -> WakewordConfig:
             optimizer="adamw",
             weight_decay=1e-4,
             scheduler="cosine",
-            scheduler_warmup_epochs=3,
+            warmup_epochs=3,
             gradient_clip=1.0,
             mixed_precision=True
         ),
@@ -257,7 +257,7 @@ def get_high_accuracy_preset() -> WakewordConfig:
             optimizer="adamw",
             weight_decay=5e-4,
             scheduler="cosine",
-            scheduler_warmup_epochs=10,
+            warmup_epochs=10,
             gradient_clip=0.5,  # Stricter clipping
             mixed_precision=True
         ),

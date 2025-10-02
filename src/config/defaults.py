@@ -101,11 +101,20 @@ class OptimizerConfig:
     optimizer: str = "adam"  # adam, sgd, adamw
     weight_decay: float = 1e-4
     momentum: float = 0.9  # For SGD
+    betas: tuple = (0.9, 0.999)  # For Adam/AdamW
 
     # Scheduler
     scheduler: str = "cosine"  # cosine, step, plateau, none
-    scheduler_warmup_epochs: int = 5
+    warmup_epochs: int = 5
     min_lr: float = 1e-6
+
+    # Step scheduler parameters
+    step_size: int = 10
+    gamma: float = 0.1
+
+    # Plateau scheduler parameters
+    patience: int = 5
+    factor: float = 0.5
 
     # Gradient
     gradient_clip: float = 1.0
