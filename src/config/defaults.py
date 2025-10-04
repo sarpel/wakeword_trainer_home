@@ -2,7 +2,7 @@
 Default Configuration Parameters for Wakeword Training
 Defines basic and advanced training hyperparameters
 """
-from typing import Dict, Any
+from typing import Dict, Any, List
 from dataclasses import dataclass, asdict, field
 import yaml
 from pathlib import Path
@@ -13,14 +13,14 @@ class DataConfig:
     """Data processing configuration"""
     # Audio parameters
     sample_rate: int = 16000  # Hz
-    audio_duration: float = 1.5  # seconds
+    audio_duration: float = 2.5  # seconds
     n_mfcc: int = 40  # Number of MFCC coefficients
-    n_fft: int = 512  # FFT window size
+    n_fft: int = 1024  # FFT window size
     hop_length: int = 160  # Hop length for STFT
-    n_mels: int = 64  # Number of mel bands
+    n_mels: int = 128  # Number of mel bands
 
     # Feature extraction
-    feature_type: str = "mel_spectrogram"  # mel_spectrogram, mfcc, raw
+    feature_type: str = "mel"  # mel, mfcc
     normalize_audio: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
@@ -32,13 +32,13 @@ class DataConfig:
 class TrainingConfig:
     """Training configuration"""
     # Basic training parameters
-    batch_size: int = 32
-    epochs: int = 50
+    batch_size: int = 128
+    epochs: int = 30
     learning_rate: float = 0.001
     early_stopping_patience: int = 10
 
     # Hardware
-    num_workers: int = 4
+    num_workers: int = 16
     pin_memory: bool = True
     persistent_workers: bool = True
 
@@ -56,7 +56,7 @@ class ModelConfig:
     """Model architecture configuration"""
     architecture: str = "resnet18"  # resnet18, mobilenetv3, lstm, gru, tcn
     num_classes: int = 2  # Binary classification
-    pretrained: bool = False  # Use pretrained weights (ImageNet)
+    pretrained: bool = True  # Use pretrained weights (ImageNet)
     dropout: float = 0.3
 
     # Architecture-specific parameters
@@ -73,8 +73,8 @@ class ModelConfig:
 class AugmentationConfig:
     """Data augmentation configuration"""
     # Time domain augmentation
-    time_stretch_min: float = 0.8
-    time_stretch_max: float = 1.2
+    time_stretch_min: float = 0.80
+    time_stretch_max: float = 1.20
     pitch_shift_min: int = -2  # semitones
     pitch_shift_max: int = 2  # semitones
 
@@ -84,11 +84,11 @@ class AugmentationConfig:
     noise_snr_max: float = 20.0  # dB
 
     # RIR augmentation
-    rir_prob: float = 0.3
+    rir_prob: float = 0.25
 
     # Frequency domain augmentation
-    freq_mask_prob: float = 0.3
-    time_mask_prob: float = 0.3
+    freq_mask_prob: float = 0.5
+    time_mask_prob: float = 0.5
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -98,27 +98,27 @@ class AugmentationConfig:
 @dataclass
 class OptimizerConfig:
     """Optimizer and scheduler configuration"""
-    optimizer: str = "adam"  # adam, sgd, adamw
+    optimizer: str = "adamw"  # adam, sgd, adamw
     weight_decay: float = 1e-4
     momentum: float = 0.9  # For SGD
-    betas: tuple = (0.9, 0.999)  # For Adam/AdamW
+    betas: List[float] = field(default_factory=lambda: [0.9, 0.999])
 
     # Scheduler
     scheduler: str = "cosine"  # cosine, step, plateau, none
-    warmup_epochs: int = 5
-    min_lr: float = 1e-6
+    warmup_epochs: int = 3
+    min_lr: float = 3e-4
 
     # Step scheduler parameters
     step_size: int = 10
     gamma: float = 0.1
 
     # Plateau scheduler parameters
-    patience: int = 5
+    patience: int = 15
     factor: float = 0.5
 
     # Gradient
     gradient_clip: float = 1.0
-    mixed_precision: bool = True
+    mixed_precision: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -129,7 +129,7 @@ class OptimizerConfig:
 class LossConfig:
     """Loss function configuration"""
     loss_function: str = "cross_entropy"  # cross_entropy, focal_loss
-    label_smoothing: float = 0.1
+    label_smoothing: float = 0.05
 
     # Focal loss parameters
     focal_alpha: float = 0.25
@@ -137,7 +137,7 @@ class LossConfig:
 
     # Class weighting
     class_weights: str = "balanced"  # balanced, none, custom
-    hard_negative_weight: float = 2.0
+    hard_negative_weight: float = 2.5
 
     # Sampling strategy
     sampler_strategy: str = "weighted"  # weighted, balanced, none
@@ -195,7 +195,7 @@ class WakewordConfig:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(path, 'w') as f:
-            yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
+            yaml.safe_dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)  # <-- safe_dump
 
     @classmethod
     def load(cls, path: Path) -> 'WakewordConfig':

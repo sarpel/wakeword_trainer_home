@@ -4,6 +4,7 @@ Wakeword Training Platform with 6 panels
 """
 import gradio as gr
 import sys
+import asyncio
 from pathlib import Path
 
 # Add src to path
@@ -17,6 +18,40 @@ from src.ui.panel_training import create_training_panel
 from src.ui.panel_evaluation import create_evaluation_panel
 from src.ui.panel_export import create_export_panel
 from src.ui.panel_docs import create_docs_panel
+
+
+def suppress_windows_asyncio_errors():
+    """
+    Suppress harmless Windows asyncio errors from closed connections.
+
+    On Windows, ProactorEventLoop raises ConnectionResetError when trying to
+    shutdown already-closed sockets (common with WebSocket disconnects).
+    This handler suppresses these specific harmless errors to keep terminal clean.
+    """
+    if sys.platform == 'win32':
+        def handle_exception(loop, context):
+            # Check if this is the specific harmless error
+            exception = context.get('exception')
+            if isinstance(exception, ConnectionResetError):
+                # Check if it's from _ProactorBasePipeTransport
+                message = context.get('message', '')
+                if '_ProactorBasePipeTransport' in message or \
+                   '_call_connection_lost' in str(context.get('source_traceback', '')):
+                    # Silently ignore this error
+                    return
+
+            # For other exceptions, use default handling
+            loop.default_exception_handler(context)
+
+        # Set the custom exception handler
+        try:
+            loop = asyncio.get_event_loop()
+            loop.set_exception_handler(handle_exception)
+        except RuntimeError:
+            # If no event loop exists yet, create one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.set_exception_handler(handle_exception)
 
 
 def find_available_port(start_port: int = 7860, end_port: int = 7870) -> int:
@@ -137,6 +172,9 @@ def launch_app(
         inbrowser: Open browser automatically
     """
     logger = get_logger("app")
+
+    # Suppress Windows asyncio connection errors
+    suppress_windows_asyncio_errors()
 
     # Find available port if not specified
     if server_port is None:

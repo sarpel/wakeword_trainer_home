@@ -142,7 +142,7 @@ class ConfigValidator:
             ))
 
         # Feature type
-        valid_features = ["mel_spectrogram", "mfcc", "raw"]
+        valid_features = ["mel", "mel_spectrogram", "mfcc"]  # mel_spectrogram is legacy, normalized to mel
         if data_config.feature_type not in valid_features:
             self.errors.append(ValidationError(
                 "data.feature_type",
@@ -284,6 +284,13 @@ class ConfigValidator:
             self.errors.append(ValidationError(
                 "augmentation.pitch_shift",
                 f"min ({aug_config.pitch_shift_min}) must be less than max ({aug_config.pitch_shift_max})"
+            ))
+
+        # Pitch shift must be integers (for random.randint)
+        if not isinstance(aug_config.pitch_shift_min, int) or not isinstance(aug_config.pitch_shift_max, int):
+            self.errors.append(ValidationError(
+                "augmentation.pitch_shift",
+                f"pitch_shift values must be integers (got min={type(aug_config.pitch_shift_min).__name__}, max={type(aug_config.pitch_shift_max).__name__})"
             ))
 
         # Probabilities

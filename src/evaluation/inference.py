@@ -18,6 +18,7 @@ except ImportError:
     logging.warning("sounddevice not installed. Microphone inference not available.")
 
 from src.data.audio_utils import AudioProcessor
+from src.data.feature_extraction import FeatureExtractor
 from src.config.cuda_utils import enforce_cuda
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,12 @@ class MicrophoneInference:
         audio_duration: float = 1.5,
         threshold: float = 0.5,
         device: str = 'cuda',
-        callback: Optional[Callable] = None
+        callback: Optional[Callable] = None,
+        feature_type: str = 'mel',
+        n_mels: int = 128,
+        n_mfcc: int = 40,
+        n_fft: int = 1024,
+        hop_length: int = 160
     ):
         """
         Initialize microphone inference
@@ -47,6 +53,11 @@ class MicrophoneInference:
             threshold: Detection threshold
             device: Device for inference
             callback: Callback function called on detection (confidence, is_positive)
+            feature_type: Feature type ('mel' or 'mfcc')
+            n_mels: Number of mel filterbanks
+            n_mfcc: Number of MFCC coefficients
+            n_fft: FFT window size
+            hop_length: Hop length for STFT
         """
         if sd is None:
             raise ImportError(
@@ -73,6 +84,21 @@ class MicrophoneInference:
         self.audio_processor = AudioProcessor(
             target_sr=sample_rate,
             target_duration=audio_duration
+        )
+
+        # Normalize feature type (handle legacy 'mel_spectrogram')
+        if feature_type == 'mel_spectrogram':
+            feature_type = 'mel'
+
+        # Feature extractor
+        self.feature_extractor = FeatureExtractor(
+            sample_rate=sample_rate,
+            feature_type=feature_type,
+            n_mels=n_mels,
+            n_mfcc=n_mfcc,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            device=device
         )
 
         # Recording state
@@ -164,13 +190,19 @@ class MicrophoneInference:
             if np.max(np.abs(audio_chunk)) > 0:
                 audio_chunk = audio_chunk / np.max(np.abs(audio_chunk))
 
-            # Convert to 2D mel spectrogram
-            audio_tensor = torch.from_numpy(audio_chunk).float().unsqueeze(0).to(self.device)
+            # Convert to tensor
+            audio_tensor = torch.from_numpy(audio_chunk).float()
+
+            # Extract features
+            features = self.feature_extractor(audio_tensor)
+
+            # Add batch dimension
+            features = features.unsqueeze(0).to(self.device)
 
             # Inference
             with torch.no_grad():
                 with torch.cuda.amp.autocast():
-                    logits = self.model(audio_tensor)
+                    logits = self.model(features)
 
             # Get prediction
             probabilities = torch.softmax(logits, dim=1)

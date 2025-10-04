@@ -37,8 +37,16 @@ data/
 models/
 # Jupyter Notebook
 .ipynb_checkpoints
+*.ipynb
 models/
 unused_datasets/
+tests/
+logs/
+docs/
+configs/
+CLAUDE.md
+implementation_plan.md
+
 
 # Data files (large datasets)
 data/raw/**/*.wav
@@ -47,6 +55,11 @@ data/raw/**/*.flac
 data/raw/**/*.ogg
 data/processed/**
 data/splits/*.json
+
+# Test audio files
+tests/**/*.wav
+tests/**/*.mp3
+tests/desktop.ini
 
 # Keep directory structure
 !data/raw/positive/.gitkeep
@@ -88,6 +101,7 @@ dmypy.json
 *.temp
 temp/
 tmp/
+nul
 
 # OS specific
 Thumbs.db

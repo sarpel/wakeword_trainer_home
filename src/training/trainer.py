@@ -2,15 +2,19 @@
 Wakeword Training Loop
 GPU-accelerated training with checkpointing, early stopping, and metrics tracking
 """
+
+import time
+from pathlib import Path
+from typing import Optional, Dict, Any, Tuple, Callable
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from pathlib import Path
-from typing import Optional, Dict, Any, Tuple, Callable
 from dataclasses import dataclass
-import time
 import logging
 from tqdm import tqdm
+
+torch.backends.cudnn.benchmark = True
 
 from src.training.metrics import MetricsTracker, MetricMonitor, MetricResults
 from src.training.optimizer_factory import (
@@ -54,14 +58,6 @@ class Trainer:
     ):
         """
         Initialize trainer
-
-        Args:
-            model: PyTorch model
-            train_loader: Training data loader
-            val_loader: Validation data loader
-            config: Configuration object (WakewordConfig)
-            checkpoint_dir: Directory for saving checkpoints
-            device: Device for training ('cuda' mandatory)
         """
         # Enforce GPU requirement
         enforce_cuda()
@@ -71,6 +67,8 @@ class Trainer:
 
         # Move model to GPU
         self.model = model.to(device)
+        # channels_last bellek düzeni (Ampere+ için throughput ↑)
+        self.model = self.model.to(memory_format=torch.channels_last)  # CHANGE
 
         # Data loaders
         self.train_loader = train_loader
@@ -83,12 +81,12 @@ class Trainer:
             label_smoothing=config.loss.label_smoothing,
             focal_alpha=config.loss.focal_alpha,
             focal_gamma=config.loss.focal_gamma,
-            class_weights=None,  # Will be set externally if needed
+            class_weights=None,
             device=device
         ).to(device)
 
-        # Create optimizer and scheduler
-        self.optimizer, self.scheduler = create_optimizer_and_scheduler(model, config)
+        # Create optimizer and scheduler (self.model ile kur)
+        self.optimizer, self.scheduler = create_optimizer_and_scheduler(self.model, config)  # CHANGE
 
         # Mixed precision training
         self.use_mixed_precision = config.optimizer.mixed_precision
@@ -128,22 +126,13 @@ class Trainer:
         logger.info(f"  Checkpoint dir: {self.checkpoint_dir}")
 
     def train_epoch(self, epoch: int) -> Tuple[float, float]:
-        """
-        Train for one epoch
-
-        Args:
-            epoch: Current epoch number
-
-        Returns:
-            Tuple of (average_loss, average_accuracy)
-        """
+        """Train for one epoch"""
         self.model.train()
         self.train_metrics_tracker.reset()
 
         epoch_loss = 0.0
         num_batches = len(self.train_loader)
 
-        # Progress bar
         pbar = tqdm(
             self.train_loader,
             desc=f"Epoch {epoch+1}/{self.config.training.epochs} [Train]",
@@ -151,25 +140,26 @@ class Trainer:
         )
 
         for batch_idx, batch in enumerate(pbar):
-            # Unpack batch (handles both 2 and 3 value returns)
+            # Unpack batch
             if len(batch) == 3:
-                inputs, targets, _ = batch  # Ignore metadata
+                inputs, targets, _ = batch
             else:
                 inputs, targets = batch
 
-            # Move to device
-            inputs = inputs.to(self.device, non_blocking=True)
+            # Move to device with channels_last
+            inputs = inputs.to(self.device, non_blocking=True, memory_format=torch.channels_last)
+
             targets = targets.to(self.device, non_blocking=True)
 
             # Zero gradients
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
 
             # Mixed precision forward pass
             with torch.cuda.amp.autocast(enabled=self.use_mixed_precision):
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, targets)
 
-            # Backward pass with gradient scaling
+            # Backward with scaling
             self.scaler.scale(loss).backward()
 
             # Gradient clipping
@@ -183,16 +173,14 @@ class Trainer:
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            # Calculate batch accuracy
+            # Metrics
             with torch.no_grad():
                 pred_classes = torch.argmax(outputs, dim=1)
                 batch_acc = (pred_classes == targets).float().mean().item()
 
-            # Update metrics
             self.train_metrics_tracker.update(outputs.detach(), targets.detach())
             self.metric_monitor.update_batch(loss.item(), batch_acc)
 
-            # Update progress bar
             epoch_loss += loss.item()
             running_avg = self.metric_monitor.get_running_averages()
             pbar.set_postfix({
@@ -201,13 +189,9 @@ class Trainer:
                 'lr': f"{get_learning_rate(self.optimizer):.6f}"
             })
 
-            # Update global step
             self.state.global_step += 1
-
-            # Call batch callbacks
             self._call_callbacks('on_batch_end', batch_idx, loss.item(), batch_acc)
 
-        # Calculate epoch metrics
         avg_loss = epoch_loss / num_batches
         train_metrics = self.train_metrics_tracker.compute()
 
@@ -216,22 +200,13 @@ class Trainer:
         return avg_loss, train_metrics.accuracy
 
     def validate_epoch(self, epoch: int) -> Tuple[float, MetricResults]:
-        """
-        Validate for one epoch
-
-        Args:
-            epoch: Current epoch number
-
-        Returns:
-            Tuple of (average_loss, MetricResults)
-        """
+        """Validate for one epoch"""
         self.model.eval()
         self.val_metrics_tracker.reset()
 
         epoch_loss = 0.0
         num_batches = len(self.val_loader)
 
-        # Progress bar
         pbar = tqdm(
             self.val_loader,
             desc=f"Epoch {epoch+1}/{self.config.training.epochs} [Val]",
@@ -240,29 +215,24 @@ class Trainer:
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(pbar):
-                # Unpack batch (handles both 2 and 3 value returns)
                 if len(batch) == 3:
-                    inputs, targets, _ = batch  # Ignore metadata
+                    inputs, targets, _ = batch
                 else:
                     inputs, targets = batch
 
-                # Move to device
-                inputs = inputs.to(self.device, non_blocking=True)
+                # channels_last tutarlılığı
+                inputs = inputs.to(self.device, non_blocking=True, memory_format=torch.channels_last)  # CHANGE
                 targets = targets.to(self.device, non_blocking=True)
 
-                # Mixed precision forward pass
                 with torch.cuda.amp.autocast(enabled=self.use_mixed_precision):
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
 
-                # Update metrics
                 self.val_metrics_tracker.update(outputs.detach(), targets.detach())
 
-                # Update progress bar
                 epoch_loss += loss.item()
                 pbar.set_postfix({'loss': f"{loss.item():.4f}"})
 
-        # Calculate epoch metrics
         avg_loss = epoch_loss / num_batches
         val_metrics = self.val_metrics_tracker.compute()
 
@@ -275,23 +245,12 @@ class Trainer:
         start_epoch: int = 0,
         resume_from: Optional[Path] = None
     ) -> Dict[str, Any]:
-        """
-        Full training loop
-
-        Args:
-            start_epoch: Starting epoch (for resuming)
-            resume_from: Path to checkpoint to resume from
-
-        Returns:
-            Dictionary with training history and final metrics
-        """
-        # Resume from checkpoint if provided
+        """Full training loop"""
         if resume_from is not None:
             self.load_checkpoint(resume_from)
             start_epoch = self.state.epoch + 1
             logger.info(f"Resumed from checkpoint at epoch {start_epoch}")
 
-        # Training history
         history = {
             'train_loss': [],
             'train_acc': [],
@@ -311,29 +270,19 @@ class Trainer:
         logger.info(f"  Batch size: {self.config.training.batch_size}")
         logger.info("=" * 80)
 
-        # Training loop
         start_time = time.time()
 
         try:
             for epoch in range(start_epoch, self.config.training.epochs):
                 self.state.epoch = epoch
-
-                # Call epoch start callbacks
                 self._call_callbacks('on_epoch_start', epoch)
 
-                # Train
                 train_loss, train_acc = self.train_epoch(epoch)
-
-                # Validate
                 val_loss, val_metrics = self.validate_epoch(epoch)
 
-                # Update learning rate scheduler
                 self._update_scheduler(val_loss)
-
-                # Get current learning rate
                 current_lr = get_learning_rate(self.optimizer)
 
-                # Save metrics history
                 history['train_loss'].append(train_loss)
                 history['train_acc'].append(train_acc)
                 history['val_loss'].append(val_loss)
@@ -343,37 +292,29 @@ class Trainer:
                 history['val_fnr'].append(val_metrics.fnr)
                 history['learning_rates'].append(current_lr)
 
-                # Save epoch metrics to tracker
                 self.val_metrics_tracker.save_epoch_metrics(val_metrics)
 
-                # Check for improvement
                 improved = self._check_improvement(val_loss, val_metrics.f1_score, val_metrics.fpr)
 
-                # Checkpointing
                 self._save_checkpoint(epoch, val_loss, val_metrics, improved)
 
-                # Early stopping
                 if self._should_stop_early():
                     logger.info(f"Early stopping triggered after {epoch+1} epochs")
                     break
 
-                # Call epoch end callbacks
                 self._call_callbacks('on_epoch_end', epoch, train_loss, val_loss, val_metrics)
 
-                # Print epoch summary
                 print(f"\nEpoch {epoch+1}/{self.config.training.epochs}")
                 print(f"  Train: Loss={train_loss:.4f}, Acc={train_acc:.4f}")
                 print(f"  Val:   Loss={val_loss:.4f}, Acc={val_metrics.accuracy:.4f}, "
                       f"F1={val_metrics.f1_score:.4f}, FPR={val_metrics.fpr:.4f}, FNR={val_metrics.fnr:.4f}")
                 print(f"  LR: {current_lr:.6f}")
                 if improved:
-                    print(f"  ✅ New best model (improvement detected)")
-                print()
+                    print(f"  ✅ New best model (improvement detected)\n")
 
         except KeyboardInterrupt:
             logger.info("Training interrupted by user")
 
-        # Training complete
         end_time = time.time()
         self.state.training_time = end_time - start_time
 
@@ -385,14 +326,12 @@ class Trainer:
         logger.info(f"  Best val FPR: {self.state.best_val_fpr:.4f}")
         logger.info("=" * 80)
 
-        # Get best epoch info
         best_f1_epoch, best_f1_metrics = self.val_metrics_tracker.get_best_epoch('f1_score')
         best_fpr_epoch, best_fpr_metrics = self.val_metrics_tracker.get_best_epoch('fpr')
 
         logger.info(f"\nBest F1 Score: {best_f1_metrics.f1_score:.4f} (Epoch {best_f1_epoch+1})")
         logger.info(f"Best FPR: {best_fpr_metrics.fpr:.4f} (Epoch {best_fpr_epoch+1})")
 
-        # Final results
         results = {
             'history': history,
             'final_epoch': self.state.epoch,
@@ -409,13 +348,10 @@ class Trainer:
     def _update_scheduler(self, val_loss: float):
         """Update learning rate scheduler"""
         if self.scheduler is not None:
-            # ReduceLROnPlateau needs metrics
             if hasattr(self.scheduler, 'step'):
                 try:
-                    # Try with metrics (ReduceLROnPlateau)
                     self.scheduler.step(val_loss)
                 except TypeError:
-                    # No metrics needed (Cosine, Step)
                     self.scheduler.step()
 
     def _check_improvement(
@@ -424,35 +360,21 @@ class Trainer:
         val_f1: float,
         val_fpr: float
     ) -> bool:
-        """
-        Check if model improved
-
-        Args:
-            val_loss: Validation loss
-            val_f1: Validation F1 score
-            val_fpr: Validation false positive rate
-
-        Returns:
-            True if model improved
-        """
+        """Check if model improved"""
         improved = False
 
-        # Check if loss improved
         if val_loss < self.state.best_val_loss:
             self.state.best_val_loss = val_loss
             improved = True
 
-        # Check if F1 improved
         if val_f1 > self.state.best_val_f1:
             self.state.best_val_f1 = val_f1
             improved = True
 
-        # Check if FPR improved (lower is better)
         if val_fpr < self.state.best_val_fpr:
             self.state.best_val_fpr = val_fpr
             improved = True
 
-        # Update early stopping counter
         if improved:
             self.state.epochs_without_improvement = 0
         else:
@@ -471,16 +393,7 @@ class Trainer:
         val_metrics: MetricResults,
         is_best: bool
     ):
-        """
-        Save checkpoint
-
-        Args:
-            epoch: Current epoch
-            val_loss: Validation loss
-            val_metrics: Validation metrics
-            is_best: Whether this is the best model so far
-        """
-        # Determine if we should save based on frequency
+        """Save checkpoint"""
         should_save = False
 
         if self.checkpoint_frequency == 'every_epoch':
@@ -495,7 +408,6 @@ class Trainer:
         if not should_save and not is_best:
             return
 
-        # Checkpoint data
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
@@ -508,43 +420,29 @@ class Trainer:
             'val_metrics': val_metrics.to_dict()
         }
 
-        # Save regular checkpoint
         if should_save:
             checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch+1:03d}.pt"
             torch.save(checkpoint, checkpoint_path)
             logger.info(f"Saved checkpoint: {checkpoint_path}")
 
-        # Save best model
         if is_best:
             best_path = self.checkpoint_dir / "best_model.pt"
             torch.save(checkpoint, best_path)
             logger.info(f"Saved best model: {best_path}")
 
     def load_checkpoint(self, checkpoint_path: Path):
-        """
-        Load checkpoint
-
-        Args:
-            checkpoint_path: Path to checkpoint file
-        """
+        """Load checkpoint"""
         logger.info(f"Loading checkpoint from: {checkpoint_path}")
 
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
-        # Load model
         self.model.load_state_dict(checkpoint['model_state_dict'])
-
-        # Load optimizer
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
-        # Load scheduler
         if self.scheduler and checkpoint['scheduler_state_dict']:
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
-        # Load scaler
         self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
-
-        # Load state
         self.state = checkpoint['state']
 
         logger.info(f"Checkpoint loaded: Epoch {self.state.epoch + 1}")
@@ -558,7 +456,6 @@ class Trainer:
         for callback in self.callbacks:
             if hasattr(callback, event):
                 getattr(callback, event)(*args, **kwargs)
-
 
 if __name__ == "__main__":
     # Test trainer initialization

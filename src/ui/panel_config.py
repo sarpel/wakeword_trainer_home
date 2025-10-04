@@ -66,7 +66,7 @@ def create_config_panel(state: gr.State = None) -> gr.Blocks:
                     )
                     audio_duration = gr.Number(
                         label="Audio Duration (seconds)",
-                        value=1.5,
+                        value=2.5,
                         info="Length of audio clips (1.5-2s typical)"
                     )
 
@@ -78,7 +78,7 @@ def create_config_panel(state: gr.State = None) -> gr.Blocks:
                     )
                     n_fft = gr.Dropdown(
                         choices=[256, 512, 1024, 2048],
-                        value=512,
+                        value=1024,
                         label="FFT Size",
                         info="FFT window size"
                     )
@@ -86,12 +86,12 @@ def create_config_panel(state: gr.State = None) -> gr.Blocks:
                 gr.Markdown("### Training Parameters")
                 with gr.Row():
                     batch_size = gr.Slider(
-                        minimum=8, maximum=256, value=32, step=8,
+                        minimum=8, maximum=1024, value=128, step=16,
                         label="Batch Size",
                         info="Training batch size (GPU memory dependent)"
                     )
                     epochs = gr.Slider(
-                        minimum=10, maximum=200, value=50, step=10,
+                        minimum=10, maximum=200, value=30, step=10,
                         label="Epochs",
                         info="Number of training epochs"
                     )
@@ -103,7 +103,7 @@ def create_config_panel(state: gr.State = None) -> gr.Blocks:
                         info="Initial learning rate (0.001 recommended)"
                     )
                     early_stopping = gr.Slider(
-                        minimum=5, maximum=30, value=10, step=5,
+                        minimum=5, maximum=30, value=10, step=1,
                         label="Early Stopping Patience",
                         info="Epochs to wait before stopping"
                     )
@@ -153,7 +153,7 @@ def create_config_panel(state: gr.State = None) -> gr.Blocks:
                         label="Background Noise Probability"
                     )
                     rir_prob = gr.Slider(
-                        minimum=0, maximum=1, value=0.3, step=0.1,
+                        minimum=0, maximum=1, value=0.25, step=0.05,
                         label="RIR Probability"
                     )
 
@@ -171,7 +171,7 @@ def create_config_panel(state: gr.State = None) -> gr.Blocks:
                 with gr.Row():
                     optimizer = gr.Dropdown(
                         choices=["adam", "sgd", "adamw"],
-                        value="adam",
+                        value="adamw",
                         label="Optimizer"
                     )
                     scheduler = gr.Dropdown(
@@ -193,11 +193,11 @@ def create_config_panel(state: gr.State = None) -> gr.Blocks:
                 with gr.Row():
                     mixed_precision = gr.Checkbox(
                         label="Mixed Precision Training (FP16)",
-                        value=True,
+                        value=False,
                         info="Faster training, less memory"
                     )
                     num_workers = gr.Slider(
-                        minimum=0, maximum=16, value=4, step=1,
+                        minimum=0, maximum=32, value=16, step=1,
                         label="Data Loader Workers"
                     )
 
@@ -209,7 +209,7 @@ def create_config_panel(state: gr.State = None) -> gr.Blocks:
                         label="Loss Function"
                     )
                     label_smoothing = gr.Slider(
-                        minimum=0, maximum=0.3, value=0.1, step=0.05,
+                        minimum=0, maximum=0.3, value=0.05, step=0.05,
                         label="Label Smoothing"
                     )
 

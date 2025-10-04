@@ -80,6 +80,35 @@ class WarmupScheduler:
         """Get last learning rate"""
         return [group['lr'] for group in self.optimizer.param_groups]
 
+    def state_dict(self):
+        """
+        Returns the state of the scheduler as a dictionary
+
+        Returns:
+            Dictionary containing scheduler state
+        """
+        state = {
+            'current_epoch': self.current_epoch,
+            'base_lrs': self.base_lrs,
+            'warmup_epochs': self.warmup_epochs,
+            'base_scheduler_state': self.base_scheduler.state_dict() if self.base_scheduler else None
+        }
+        return state
+
+    def load_state_dict(self, state_dict):
+        """
+        Loads the scheduler state
+
+        Args:
+            state_dict: Dictionary containing scheduler state
+        """
+        self.current_epoch = state_dict['current_epoch']
+        self.base_lrs = state_dict['base_lrs']
+        self.warmup_epochs = state_dict['warmup_epochs']
+
+        if self.base_scheduler and state_dict['base_scheduler_state']:
+            self.base_scheduler.load_state_dict(state_dict['base_scheduler_state'])
+
 
 def create_optimizer(
     model: nn.Module,

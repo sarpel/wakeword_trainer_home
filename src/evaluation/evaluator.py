@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass
 
 from src.data.audio_utils import AudioProcessor
+from src.data.feature_extraction import FeatureExtractor
 from src.training.metrics import MetricsCalculator, MetricResults
 from src.config.cuda_utils import enforce_cuda
 
@@ -38,7 +39,12 @@ class ModelEvaluator:
         model: nn.Module,
         sample_rate: int = 16000,
         audio_duration: float = 1.5,
-        device: str = 'cuda'
+        device: str = 'cuda',
+        feature_type: str = 'mel',
+        n_mels: int = 128,
+        n_mfcc: int = 40,
+        n_fft: int = 1024,
+        hop_length: int = 160
     ):
         """
         Initialize model evaluator
@@ -48,6 +54,11 @@ class ModelEvaluator:
             sample_rate: Audio sample rate
             audio_duration: Audio duration in seconds
             device: Device for inference ('cuda' or 'cpu')
+            feature_type: Feature type ('mel' or 'mfcc')
+            n_mels: Number of mel filterbanks
+            n_mfcc: Number of MFCC coefficients
+            n_fft: FFT window size
+            hop_length: Hop length for STFT
         """
         # Enforce CUDA
         enforce_cuda()
@@ -65,6 +76,21 @@ class ModelEvaluator:
         self.audio_processor = AudioProcessor(
             target_sr=sample_rate,
             target_duration=audio_duration
+        )
+
+        # Normalize feature type (handle legacy 'mel_spectrogram')
+        if feature_type == 'mel_spectrogram':
+            feature_type = 'mel'
+
+        # Feature extractor
+        self.feature_extractor = FeatureExtractor(
+            sample_rate=sample_rate,
+            feature_type=feature_type,
+            n_mels=n_mels,
+            n_mfcc=n_mfcc,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            device=device
         )
 
         # Metrics calculator
@@ -92,13 +118,19 @@ class ModelEvaluator:
         # Load and process audio
         audio = self.audio_processor.process_audio(audio_path)
 
-        # Convert to tensor and add batch dimension
-        audio_tensor = torch.from_numpy(audio).float().unsqueeze(0).to(self.device)
+        # Convert to tensor
+        audio_tensor = torch.from_numpy(audio).float()
+
+        # Extract features
+        features = self.feature_extractor(audio_tensor)
+
+        # Add batch dimension
+        features = features.unsqueeze(0).to(self.device)
 
         # Inference
         with torch.no_grad():
             with torch.cuda.amp.autocast():
-                logits = self.model(audio_tensor)
+                logits = self.model(features)
 
         # Get prediction
         probabilities = torch.softmax(logits, dim=1)
@@ -165,8 +197,15 @@ class ModelEvaluator:
             if not batch_audio:
                 continue
 
-            # Convert to tensor
-            batch_tensor = torch.from_numpy(np.stack(batch_audio)).float().to(self.device)
+            # Convert to tensor and extract features
+            batch_features = []
+            for audio in batch_audio:
+                audio_tensor = torch.from_numpy(audio).float()
+                features = self.feature_extractor(audio_tensor)
+                batch_features.append(features)
+
+            # Stack batch and move to device
+            batch_tensor = torch.stack(batch_features).to(self.device)
 
             # Batch inference
             start_time = time.time()
@@ -215,13 +254,25 @@ class ModelEvaluator:
         """
         from torch.utils.data import DataLoader
 
+        def collate_fn(batch):
+            """Custom collate function to handle metadata"""
+            features, labels, metadata_list = zip(*batch)
+
+            # Stack features and labels
+            features = torch.stack(features)
+            labels = torch.tensor(labels)
+
+            # Keep metadata as list of dicts
+            return features, labels, list(metadata_list)
+
         # Create dataloader
         loader = DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=False,
             num_workers=0,  # Single process for evaluation
-            pin_memory=True
+            pin_memory=True,
+            collate_fn=collate_fn
         )
 
         all_predictions = []
@@ -293,13 +344,25 @@ class ModelEvaluator:
         """
         from torch.utils.data import DataLoader
 
+        def collate_fn(batch):
+            """Custom collate function to handle metadata"""
+            features, labels, metadata_list = zip(*batch)
+
+            # Stack features and labels
+            features = torch.stack(features)
+            labels = torch.tensor(labels)
+
+            # Keep metadata as list of dicts
+            return features, labels, list(metadata_list)
+
         # Create dataloader
         loader = DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=False,
             num_workers=0,
-            pin_memory=True
+            pin_memory=True,
+            collate_fn=collate_fn
         )
 
         all_confidences = []
@@ -420,7 +483,12 @@ if __name__ == "__main__":
             evaluator = ModelEvaluator(
                 model=model,
                 sample_rate=info['config'].data.sample_rate,
-                audio_duration=info['config'].data.audio_duration
+                audio_duration=info['config'].data.audio_duration,
+                feature_type=info['config'].data.feature_type,
+                n_mels=info['config'].data.n_mels,
+                n_mfcc=info['config'].data.n_mfcc,
+                n_fft=info['config'].data.n_fft,
+                hop_length=info['config'].data.hop_length
             )
 
             print(f"✅ Evaluator created")

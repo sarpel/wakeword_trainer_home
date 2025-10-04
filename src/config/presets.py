@@ -106,15 +106,15 @@ def get_large_dataset_preset() -> WakewordConfig:
         description="Optimized for large datasets (>100k samples) with faster training",
         data=DataConfig(
             sample_rate=16000,
-            audio_duration=1.5,
+            audio_duration=2.5,
             n_mfcc=40
         ),
         training=TrainingConfig(
-            batch_size=64,  # Larger batch
+            batch_size=128,  # Larger batch
             epochs=30,  # Fewer epochs needed
             learning_rate=0.002,  # Higher LR for faster convergence
             early_stopping_patience=8,
-            num_workers=8  # More workers
+            num_workers=16  # More workers
         ),
         model=ModelConfig(
             architecture="resnet18",  # Larger model

@@ -102,7 +102,12 @@ def load_model(model_path: str) -> str:
             model=model,
             sample_rate=info['config'].data.sample_rate,
             audio_duration=info['config'].data.audio_duration,
-            device='cuda'
+            device='cuda',
+            feature_type=info['config'].data.feature_type,
+            n_mels=info['config'].data.n_mels,
+            n_mfcc=info['config'].data.n_mfcc,
+            n_fft=info['config'].data.n_fft,
+            hop_length=info['config'].data.hop_length
         )
 
         # Update state
@@ -266,7 +271,12 @@ def start_microphone():
                 sample_rate=eval_state.model_info['config'].data.sample_rate,
                 audio_duration=eval_state.model_info['config'].data.audio_duration,
                 threshold=0.5,
-                device='cuda'
+                device='cuda',
+                feature_type=eval_state.model_info['config'].data.feature_type,
+                n_mels=eval_state.model_info['config'].data.n_mels,
+                n_mfcc=eval_state.model_info['config'].data.n_mfcc,
+                n_fft=eval_state.model_info['config'].data.n_fft,
+                hop_length=eval_state.model_info['config'].data.hop_length
             )
         except ImportError:
             # Fallback to simulated
@@ -409,7 +419,12 @@ def evaluate_test_set(test_split_path: str, threshold: float) -> Tuple:
             sample_rate=eval_state.model_info['config'].data.sample_rate,
             audio_duration=eval_state.model_info['config'].data.audio_duration,
             augment=False,
-            device='cuda'
+            device='cuda',
+            feature_type=eval_state.model_info['config'].data.feature_type,
+            n_mels=eval_state.model_info['config'].data.n_mels,
+            n_mfcc=eval_state.model_info['config'].data.n_mfcc,
+            n_fft=eval_state.model_info['config'].data.n_fft,
+            hop_length=eval_state.model_info['config'].data.hop_length
         )
 
         logger.info(f"Loaded {len(test_dataset)} test samples")

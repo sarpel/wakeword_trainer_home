@@ -2,17 +2,17 @@ config_name: custom
 description: Custom configuration from UI
 data:
   sample_rate: 16000
-  audio_duration: 1.8
+  audio_duration: 2.5
   n_mfcc: 40
-  n_fft: 512
+  n_fft: 1024
   hop_length: 160
-  n_mels: 64
+  n_mels: 128
   feature_type: mel_spectrogram
   normalize_audio: true
 training:
-  batch_size: 64
-  epochs: 50
-  learning_rate: 0.0005
+  batch_size: 248
+  epochs: 30
+  learning_rate: 0.001
   early_stopping_patience: 10
   num_workers: 1
   pin_memory: true
@@ -22,7 +22,7 @@ training:
 model:
   architecture: resnet18
   num_classes: 2
-  pretrained: false
+  pretrained: true
   dropout: 0.3
   hidden_size: 128
   num_layers: 2
@@ -35,21 +35,28 @@ augmentation:
   background_noise_prob: 0.5
   noise_snr_min: 5.0
   noise_snr_max: 20.0
-  rir_prob: 0.3
-  freq_mask_prob: 0.3
-  time_mask_prob: 0.3
+  rir_prob: 0.25
+  freq_mask_prob: 0.5
+  time_mask_prob: 0.5
 optimizer:
-  optimizer: adam
+  optimizer: adamw
   weight_decay: 0.0001
   momentum: 0.9
+  betas:
+  - 0.9
+  - 0.999
   scheduler: cosine
-  scheduler_warmup_epochs: 5
-  min_lr: 1.0e-06
+  warmup_epochs: 3
+  min_lr: 0.0003
+  step_size: 10
+  gamma: 0.1
+  patience: 15
+  factor: 0.5
   gradient_clip: 1.0
-  mixed_precision: true
+  mixed_precision: false
 loss:
   loss_function: cross_entropy
-  label_smoothing: 0.1
+  label_smoothing: 0.05
   focal_alpha: 0.25
   focal_gamma: 2.0
   class_weights: balanced
