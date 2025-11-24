@@ -41,6 +41,10 @@ class CheckpointManager:
     Manage model checkpoints
     Load, save, list, and clean up checkpoints
     """
+    
+    # Minimum checkpoint file size to be considered valid (1KB)
+    # Checkpoints smaller than this are likely corrupt
+    MIN_CHECKPOINT_SIZE = 1024
 
     def __init__(self, checkpoint_dir: Path):
         """
@@ -62,11 +66,26 @@ class CheckpointManager:
             List of CheckpointInfo objects
         """
         checkpoints = []
+        
+        # BUGFIX: Validate checkpoint directory exists
+        if not self.checkpoint_dir.exists():
+            logger.warning(f"Checkpoint directory does not exist: {self.checkpoint_dir}")
+            return checkpoints
 
         for checkpoint_path in self.checkpoint_dir.glob("*.pt"):
             try:
+                # BUGFIX: Skip files that are too small (likely corrupt) - using class constant
+                if checkpoint_path.stat().st_size < self.MIN_CHECKPOINT_SIZE:
+                    logger.warning(f"Skipping suspicious checkpoint (< {self.MIN_CHECKPOINT_SIZE} bytes): {checkpoint_path}")
+                    continue
+                
                 # Load checkpoint metadata
                 checkpoint = torch.load(checkpoint_path, map_location='cpu')
+                
+                # BUGFIX: Validate checkpoint structure
+                if not isinstance(checkpoint, dict):
+                    logger.warning(f"Invalid checkpoint format: {checkpoint_path}")
+                    continue
 
                 # Extract metadata
                 epoch = checkpoint.get('epoch', 0)
@@ -114,21 +133,34 @@ class CheckpointManager:
         Returns:
             CheckpointInfo for best checkpoint, or None if no checkpoints
         """
+        # BUGFIX: Validate mode parameter
+        if mode not in ['min', 'max']:
+            raise ValueError(f"Mode must be 'min' or 'max', got '{mode}'")
+        
         checkpoints = self.list_checkpoints()
 
         if not checkpoints:
             logger.warning("No checkpoints found")
             return None
+        
+        # BUGFIX: Validate metric exists in CheckpointInfo
+        valid_metrics = ['val_loss', 'val_accuracy', 'val_f1', 'val_fpr', 'val_fnr']
+        if metric not in valid_metrics:
+            logger.warning(f"Invalid metric '{metric}', using 'val_f1'")
+            metric = 'val_f1'
 
         # Select best based on metric
-        if mode == 'min':
-            best = min(checkpoints, key=lambda x: getattr(x, metric))
-        else:
-            best = max(checkpoints, key=lambda x: getattr(x, metric))
+        try:
+            if mode == 'min':
+                best = min(checkpoints, key=lambda x: getattr(x, metric))
+            else:
+                best = max(checkpoints, key=lambda x: getattr(x, metric))
 
-        logger.info(f"Best checkpoint ({metric}, {mode}): {best}")
-
-        return best
+            logger.info(f"Best checkpoint ({metric}, {mode}): {best}")
+            return best
+        except Exception as e:
+            logger.error(f"Failed to find best checkpoint: {e}")
+            return None
 
     def load_checkpoint(
         self,
@@ -150,20 +182,45 @@ class CheckpointManager:
             Checkpoint dictionary
         """
         logger.info(f"Loading checkpoint: {checkpoint_path}")
+        
+        # BUGFIX: Validate checkpoint file exists
+        if not Path(checkpoint_path).exists():
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+        
+        # BUGFIX: Validate file is readable and not empty
+        if Path(checkpoint_path).stat().st_size == 0:
+            raise ValueError(f"Checkpoint file is empty: {checkpoint_path}")
 
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load checkpoint: {e}") from e
+        
+        # BUGFIX: Validate checkpoint structure
+        if not isinstance(checkpoint, dict):
+            raise ValueError(f"Invalid checkpoint format (expected dict, got {type(checkpoint)})")
 
         # Load model weights
         if model is not None:
-            model.load_state_dict(checkpoint['model_state_dict'])
-            logger.info("  Loaded model weights")
+            if 'model_state_dict' not in checkpoint:
+                logger.warning("Checkpoint missing 'model_state_dict'")
+            else:
+                try:
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    logger.info("  Loaded model weights")
+                except Exception as e:
+                    logger.error(f"Failed to load model weights: {e}")
+                    raise
 
         # Load optimizer state
         if optimizer is not None and 'optimizer_state_dict' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            logger.info("  Loaded optimizer state")
+            try:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                logger.info("  Loaded optimizer state")
+            except Exception as e:
+                logger.warning(f"Failed to load optimizer state: {e}")
 
-        logger.info(f"  Epoch: {checkpoint['epoch'] + 1}")
+        logger.info(f"  Epoch: {checkpoint.get('epoch', 'N/A')}")
         logger.info(f"  Val loss: {checkpoint.get('val_loss', 'N/A')}")
 
         return checkpoint
@@ -215,6 +272,10 @@ class CheckpointManager:
             keep_n: Number of checkpoints to keep
             keep_best: Whether to always keep best_model.pt
         """
+        # BUGFIX: Validate keep_n is positive
+        if keep_n <= 0:
+            raise ValueError(f"keep_n must be positive, got {keep_n}")
+        
         checkpoints = self.list_checkpoints()
 
         if len(checkpoints) <= keep_n:
@@ -228,6 +289,7 @@ class CheckpointManager:
         to_delete = checkpoints[:-keep_n]
 
         # Delete old checkpoints
+        deleted_count = 0
         for checkpoint in to_delete:
             # Skip best_model.pt if keep_best is True
             if keep_best and checkpoint.path.name == "best_model.pt":
@@ -236,8 +298,11 @@ class CheckpointManager:
             try:
                 checkpoint.path.unlink()
                 logger.info(f"Deleted old checkpoint: {checkpoint.path.name}")
+                deleted_count += 1
             except Exception as e:
                 logger.warning(f"Failed to delete {checkpoint.path}: {e}")
+        
+        logger.info(f"Cleanup complete: deleted {deleted_count} old checkpoints")
 
     def export_checkpoint_info(self, output_path: Path):
         """
