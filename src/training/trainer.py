@@ -132,6 +132,11 @@ class Trainer:
 
         epoch_loss = 0.0
         num_batches = len(self.train_loader)
+        
+        # BUGFIX: Prevent division by zero if loader is empty
+        if num_batches == 0:
+            logger.warning("Training loader is empty, skipping epoch")
+            return 0.0, 0.0
 
         pbar = tqdm(
             self.train_loader,
@@ -140,59 +145,87 @@ class Trainer:
         )
 
         for batch_idx, batch in enumerate(pbar):
-            # Unpack batch
-            if len(batch) == 3:
-                inputs, targets, _ = batch
-            else:
-                inputs, targets = batch
+            try:
+                # Unpack batch - BUGFIX: Validate batch structure
+                if not isinstance(batch, (tuple, list)) or len(batch) < 2:
+                    logger.error(f"Invalid batch structure at index {batch_idx}, skipping")
+                    continue
+                    
+                if len(batch) == 3:
+                    inputs, targets, _ = batch
+                else:
+                    inputs, targets = batch
 
-            # Move to device with channels_last
-            inputs = inputs.to(self.device, non_blocking=True, memory_format=torch.channels_last)
+                # BUGFIX: Validate tensor shapes before processing
+                if inputs.numel() == 0 or targets.numel() == 0:
+                    logger.warning(f"Empty tensor in batch {batch_idx}, skipping")
+                    continue
 
-            targets = targets.to(self.device, non_blocking=True)
+                # Move to device with channels_last
+                inputs = inputs.to(self.device, non_blocking=True, memory_format=torch.channels_last)
+                targets = targets.to(self.device, non_blocking=True)
 
-            # Zero gradients
-            self.optimizer.zero_grad(set_to_none=True)
+                # Zero gradients
+                self.optimizer.zero_grad(set_to_none=True)
 
-            # Mixed precision forward pass
-            with torch.cuda.amp.autocast(enabled=self.use_mixed_precision):
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, targets)
+                # Mixed precision forward pass
+                with torch.cuda.amp.autocast(enabled=self.use_mixed_precision):
+                    outputs = self.model(inputs)
+                    loss = self.criterion(outputs, targets)
+                
+                # BUGFIX: Check for NaN/Inf loss before backprop
+                if not torch.isfinite(loss):
+                    logger.error(f"Non-finite loss detected at batch {batch_idx}: {loss.item()}")
+                    continue
 
-            # Backward with scaling
-            self.scaler.scale(loss).backward()
+                # Backward with scaling
+                self.scaler.scale(loss).backward()
 
-            # Gradient clipping
-            if self.gradient_clip > 0:
-                self.scaler.unscale_(self.optimizer)
-                grad_norm = clip_gradients(self.model, self.gradient_clip)
-            else:
-                grad_norm = 0.0
+                # Gradient clipping
+                if self.gradient_clip > 0:
+                    self.scaler.unscale_(self.optimizer)
+                    grad_norm = clip_gradients(self.model, self.gradient_clip)
+                else:
+                    grad_norm = 0.0
 
-            # Optimizer step
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+                # Optimizer step
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
 
-            # Metrics
-            with torch.no_grad():
-                pred_classes = torch.argmax(outputs, dim=1)
-                batch_acc = (pred_classes == targets).float().mean().item()
+                # Metrics
+                with torch.no_grad():
+                    pred_classes = torch.argmax(outputs, dim=1)
+                    batch_acc = (pred_classes == targets).float().mean().item()
 
-            self.train_metrics_tracker.update(outputs.detach(), targets.detach())
-            self.metric_monitor.update_batch(loss.item(), batch_acc)
+                self.train_metrics_tracker.update(outputs.detach(), targets.detach())
+                self.metric_monitor.update_batch(loss.item(), batch_acc)
 
-            epoch_loss += loss.item()
-            running_avg = self.metric_monitor.get_running_averages()
-            pbar.set_postfix({
-                'loss': f"{running_avg['loss']:.4f}",
-                'acc': f"{running_avg['accuracy']:.4f}",
-                'lr': f"{get_learning_rate(self.optimizer):.6f}"
-            })
+                epoch_loss += loss.item()
+                running_avg = self.metric_monitor.get_running_averages()
+                pbar.set_postfix({
+                    'loss': f"{running_avg['loss']:.4f}",
+                    'acc': f"{running_avg['accuracy']:.4f}",
+                    'lr': f"{get_learning_rate(self.optimizer):.6f}"
+                })
 
-            self.state.global_step += 1
-            self._call_callbacks('on_batch_end', batch_idx, loss.item(), batch_acc)
+                self.state.global_step += 1
+                self._call_callbacks('on_batch_end', batch_idx, loss.item(), batch_acc)
+            
+            except RuntimeError as e:
+                # BUGFIX: Handle CUDA OOM and other runtime errors gracefully
+                if "out of memory" in str(e).lower():
+                    logger.error(f"CUDA OOM at batch {batch_idx}. Clearing cache and skipping batch.")
+                    torch.cuda.empty_cache()
+                    continue
+                else:
+                    logger.exception(f"Runtime error at batch {batch_idx}: {e}")
+                    raise  # Re-raise non-OOM errors
+            except Exception as e:
+                # BUGFIX: Catch all other exceptions to prevent training crash
+                logger.exception(f"Unexpected error at batch {batch_idx}: {e}")
+                continue
 
-        avg_loss = epoch_loss / num_batches
+        avg_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
         train_metrics = self.train_metrics_tracker.compute()
 
         logger.info(f"Epoch {epoch+1} [Train]: Loss={avg_loss:.4f}, {train_metrics}")
@@ -206,6 +239,16 @@ class Trainer:
 
         epoch_loss = 0.0
         num_batches = len(self.val_loader)
+        
+        # BUGFIX: Handle empty validation loader
+        if num_batches == 0:
+            logger.warning("Validation loader is empty")
+            return 0.0, MetricResults(
+                accuracy=0.0, precision=0.0, recall=0.0, f1_score=0.0,
+                fpr=0.0, fnr=0.0, true_positives=0, true_negatives=0,
+                false_positives=0, false_negatives=0, total_samples=0,
+                positive_samples=0, negative_samples=0
+            )
 
         pbar = tqdm(
             self.val_loader,
@@ -215,25 +258,54 @@ class Trainer:
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(pbar):
-                if len(batch) == 3:
-                    inputs, targets, _ = batch
-                else:
-                    inputs, targets = batch
+                try:
+                    # BUGFIX: Validate batch structure
+                    if not isinstance(batch, (tuple, list)) or len(batch) < 2:
+                        logger.error(f"Invalid batch structure at validation batch {batch_idx}")
+                        continue
+                        
+                    if len(batch) == 3:
+                        inputs, targets, _ = batch
+                    else:
+                        inputs, targets = batch
+                    
+                    # BUGFIX: Validate tensors are not empty
+                    if inputs.numel() == 0 or targets.numel() == 0:
+                        logger.warning(f"Empty tensor in validation batch {batch_idx}")
+                        continue
 
-                # channels_last tutarlılığı
-                inputs = inputs.to(self.device, non_blocking=True, memory_format=torch.channels_last)  # CHANGE
-                targets = targets.to(self.device, non_blocking=True)
+                    # channels_last tutarlılığı
+                    inputs = inputs.to(self.device, non_blocking=True, memory_format=torch.channels_last)  # CHANGE
+                    targets = targets.to(self.device, non_blocking=True)
 
-                with torch.cuda.amp.autocast(enabled=self.use_mixed_precision):
-                    outputs = self.model(inputs)
-                    loss = self.criterion(outputs, targets)
+                    with torch.cuda.amp.autocast(enabled=self.use_mixed_precision):
+                        outputs = self.model(inputs)
+                        loss = self.criterion(outputs, targets)
+                    
+                    # BUGFIX: Check for NaN/Inf in validation loss
+                    if not torch.isfinite(loss):
+                        logger.warning(f"Non-finite validation loss at batch {batch_idx}")
+                        continue
 
-                self.val_metrics_tracker.update(outputs.detach(), targets.detach())
+                    self.val_metrics_tracker.update(outputs.detach(), targets.detach())
 
-                epoch_loss += loss.item()
-                pbar.set_postfix({'loss': f"{loss.item():.4f}"})
+                    epoch_loss += loss.item()
+                    pbar.set_postfix({'loss': f"{loss.item():.4f}"})
+                
+                except RuntimeError as e:
+                    # BUGFIX: Handle validation errors gracefully
+                    if "out of memory" in str(e).lower():
+                        logger.error(f"CUDA OOM during validation at batch {batch_idx}")
+                        torch.cuda.empty_cache()
+                        continue
+                    else:
+                        logger.exception(f"Runtime error during validation at batch {batch_idx}: {e}")
+                        raise
+                except Exception as e:
+                    logger.exception(f"Unexpected error during validation at batch {batch_idx}: {e}")
+                    continue
 
-        avg_loss = epoch_loss / num_batches
+        avg_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
         val_metrics = self.val_metrics_tracker.compute()
 
         logger.info(f"Epoch {epoch+1} [Val]: Loss={avg_loss:.4f}, {val_metrics}")
@@ -408,41 +480,94 @@ class Trainer:
         if not should_save and not is_best:
             return
 
-        checkpoint = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
-            'scaler_state_dict': self.scaler.state_dict(),
-            'state': self.state,
-            'config': self.config,
-            'val_loss': val_loss,
-            'val_metrics': val_metrics.to_dict()
-        }
+        # BUGFIX: Create checkpoint dict safely with error handling
+        try:
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+                'scaler_state_dict': self.scaler.state_dict(),
+                'state': self.state,
+                'config': self.config,
+                'val_loss': val_loss,
+                'val_metrics': val_metrics.to_dict()
+            }
+        except Exception as e:
+            logger.error(f"Failed to create checkpoint dict: {e}")
+            return
 
+        # BUGFIX: Save with atomic write to prevent corruption
         if should_save:
             checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch+1:03d}.pt"
-            torch.save(checkpoint, checkpoint_path)
-            logger.info(f"Saved checkpoint: {checkpoint_path}")
+            temp_path = checkpoint_path.with_suffix('.pt.tmp')
+            try:
+                torch.save(checkpoint, temp_path)
+                temp_path.replace(checkpoint_path)  # Atomic rename
+                logger.info(f"Saved checkpoint: {checkpoint_path}")
+            except Exception as e:
+                logger.error(f"Failed to save checkpoint: {e}")
+                if temp_path.exists():
+                    temp_path.unlink()  # Clean up temp file
 
         if is_best:
             best_path = self.checkpoint_dir / "best_model.pt"
-            torch.save(checkpoint, best_path)
-            logger.info(f"Saved best model: {best_path}")
+            temp_best_path = best_path.with_suffix('.pt.tmp')
+            try:
+                torch.save(checkpoint, temp_best_path)
+                temp_best_path.replace(best_path)  # Atomic rename
+                logger.info(f"Saved best model: {best_path}")
+            except Exception as e:
+                logger.error(f"Failed to save best model: {e}")
+                if temp_best_path.exists():
+                    temp_best_path.unlink()  # Clean up temp file
 
     def load_checkpoint(self, checkpoint_path: Path):
-        """Load checkpoint"""
+        """Load checkpoint with error handling"""
         logger.info(f"Loading checkpoint from: {checkpoint_path}")
+        
+        # BUGFIX: Validate checkpoint file exists and is readable
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+        
+        if not checkpoint_path.is_file():
+            raise ValueError(f"Checkpoint path is not a file: {checkpoint_path}")
+        
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        except Exception as e:
+            logger.error(f"Failed to load checkpoint file: {e}")
+            raise RuntimeError(f"Corrupted or invalid checkpoint file: {checkpoint_path}") from e
+        
+        # BUGFIX: Validate checkpoint structure
+        required_keys = ['model_state_dict', 'optimizer_state_dict', 'state']
+        missing_keys = [key for key in required_keys if key not in checkpoint]
+        if missing_keys:
+            raise ValueError(f"Checkpoint missing required keys: {missing_keys}")
 
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        try:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+        except Exception as e:
+            logger.error(f"Failed to load model state dict: {e}")
+            raise RuntimeError("Model state dict incompatible with current model") from e
+        
+        try:
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        except Exception as e:
+            logger.warning(f"Failed to load optimizer state dict: {e}. Continuing with fresh optimizer.")
 
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
-        if self.scheduler and checkpoint['scheduler_state_dict']:
-            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-
-        self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        if self.scheduler and checkpoint.get('scheduler_state_dict'):
+            try:
+                self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            except Exception as e:
+                logger.warning(f"Failed to load scheduler state dict: {e}. Continuing with fresh scheduler.")
+        
+        if 'scaler_state_dict' in checkpoint:
+            try:
+                self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            except Exception as e:
+                logger.warning(f"Failed to load scaler state dict: {e}. Continuing with fresh scaler.")
+        
         self.state = checkpoint['state']
 
         logger.info(f"Checkpoint loaded: Epoch {self.state.epoch + 1}")

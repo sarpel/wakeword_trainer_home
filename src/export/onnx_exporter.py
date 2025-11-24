@@ -74,8 +74,8 @@ class ONNXExporter:
         config: ExportConfig
     ) -> Dict[str, Any]:
         """
-        Export model to ONNX
-
+        Export model to ONNX with comprehensive error handling
+        
         Args:
             config: Export configuration
 
@@ -84,11 +84,22 @@ class ONNXExporter:
         """
         logger.info(f"Exporting model to ONNX: {config.output_path}")
 
-        # Create output directory
-        config.output_path.parent.mkdir(parents=True, exist_ok=True)
+        # BUGFIX: Validate output path and create directory safely
+        try:
+            config.output_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.error(f"Failed to create output directory: {e}")
+            return {'success': False, 'error': f"Directory creation failed: {e}"}
 
-        # Create dummy input
-        dummy_input = torch.randn(*self.sample_input_shape).to(self.device)
+        # BUGFIX: Validate model is in eval mode
+        self.model.eval()
+
+        # Create dummy input with error handling
+        try:
+            dummy_input = torch.randn(*self.sample_input_shape).to(self.device)
+        except Exception as e:
+            logger.error(f"Failed to create dummy input: {e}")
+            return {'success': False, 'error': f"Input tensor creation failed: {e}"}
 
         # Dynamic axes for dynamic batch size
         dynamic_axes = None
@@ -102,6 +113,13 @@ class ONNXExporter:
         logger.info("Converting PyTorch model to ONNX...")
 
         try:
+            # BUGFIX: Test model forward pass before export
+            with torch.no_grad():
+                test_output = self.model(dummy_input)
+                if not torch.isfinite(test_output).all():
+                    logger.error("Model produces non-finite outputs")
+                    return {'success': False, 'error': 'Model outputs contain NaN or Inf'}
+            
             torch.onnx.export(
                 self.model,
                 dummy_input,
@@ -116,6 +134,10 @@ class ONNXExporter:
             )
 
             logger.info(f"✅ ONNX model exported to: {config.output_path}")
+            
+            # BUGFIX: Validate exported file exists
+            if not config.output_path.exists():
+                return {'success': False, 'error': 'Export completed but file not found'}
 
             # Get file size
             file_size_mb = config.output_path.stat().st_size / (1024 * 1024)
@@ -130,20 +152,28 @@ class ONNXExporter:
 
             # Apply quantization if requested
             if config.quantize_fp16:
-                logger.info("Applying FP16 quantization...")
-                fp16_path = self._quantize_fp16(config.output_path)
-                fp16_size_mb = fp16_path.stat().st_size / (1024 * 1024)
-                results['fp16_path'] = str(fp16_path)
-                results['fp16_size_mb'] = fp16_size_mb
-                results['fp16_reduction'] = (1 - fp16_size_mb / file_size_mb) * 100
+                try:
+                    logger.info("Applying FP16 quantization...")
+                    fp16_path = self._quantize_fp16(config.output_path)
+                    fp16_size_mb = fp16_path.stat().st_size / (1024 * 1024)
+                    results['fp16_path'] = str(fp16_path)
+                    results['fp16_size_mb'] = fp16_size_mb
+                    results['fp16_reduction'] = (1 - fp16_size_mb / file_size_mb) * 100
+                except Exception as e:
+                    logger.error(f"FP16 quantization failed: {e}")
+                    results['fp16_error'] = str(e)
 
             if config.quantize_int8:
-                logger.info("Applying INT8 quantization...")
-                int8_path = self._quantize_int8(config.output_path, dummy_input)
-                int8_size_mb = int8_path.stat().st_size / (1024 * 1024)
-                results['int8_path'] = str(int8_path)
-                results['int8_size_mb'] = int8_size_mb
-                results['int8_reduction'] = (1 - int8_size_mb / file_size_mb) * 100
+                try:
+                    logger.info("Applying INT8 quantization...")
+                    int8_path = self._quantize_int8(config.output_path, dummy_input)
+                    int8_size_mb = int8_path.stat().st_size / (1024 * 1024)
+                    results['int8_path'] = str(int8_path)
+                    results['int8_size_mb'] = int8_size_mb
+                    results['int8_reduction'] = (1 - int8_size_mb / file_size_mb) * 100
+                except Exception as e:
+                    logger.error(f"INT8 quantization failed: {e}")
+                    results['int8_error'] = str(e)
 
             return results
 

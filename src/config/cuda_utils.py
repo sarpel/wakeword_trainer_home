@@ -4,7 +4,10 @@ No CPU fallback for tensor operations - GPU is mandatory
 """
 import torch
 import sys
+import logging
 from typing import Dict, Tuple, Any
+
+logger = logging.getLogger(__name__)
 
 
 class CUDAValidator:
@@ -87,21 +90,31 @@ class CUDAValidator:
         """
         if not self.cuda_available:
             return {"error": "CUDA not available"}
+        
+        # BUGFIX: Validate device_id is within valid range
+        if device_id < 0 or device_id >= self.device_count:
+            logger.error(f"Invalid device_id {device_id}. Valid range: 0-{self.device_count-1}")
+            return {"error": f"Invalid device_id {device_id}"}
 
-        torch.cuda.set_device(device_id)
-        total = torch.cuda.get_device_properties(device_id).total_memory / (1024**3)
-        allocated = torch.cuda.memory_allocated(device_id) / (1024**3)
-        reserved = torch.cuda.memory_reserved(device_id) / (1024**3)
-        free = total - allocated
+        try:
+            torch.cuda.set_device(device_id)
+            total = torch.cuda.get_device_properties(device_id).total_memory / (1024**3)
+            allocated = torch.cuda.memory_allocated(device_id) / (1024**3)
+            reserved = torch.cuda.memory_reserved(device_id) / (1024**3)
+            free = total - allocated
 
-        return {
-            "device_id": device_id,
-            "total_gb": round(total, 2),
-            "allocated_gb": round(allocated, 2),
-            "reserved_gb": round(reserved, 2),
-            "free_gb": round(free, 2),
-            "utilization_percent": round((allocated / total) * 100, 2),
-        }
+            return {
+                "device_id": device_id,
+                "total_gb": round(total, 2),
+                "allocated_gb": round(allocated, 2),
+                "reserved_gb": round(reserved, 2),
+                "free_gb": round(free, 2),
+                "utilization_percent": round((allocated / total) * 100, 2) if total > 0 else 0.0,
+            }
+        except Exception as e:
+            # BUGFIX: Handle errors gracefully
+            logger.error(f"Error getting memory info for device {device_id}: {e}")
+            return {"error": str(e)}
 
     def estimate_batch_size(self, model_size_mb: float = 50,
                            sample_size_mb: float = 0.5,
@@ -119,8 +132,24 @@ class CUDAValidator:
         """
         if not self.cuda_available:
             return 0
+        
+        # BUGFIX: Validate inputs are positive
+        if model_size_mb <= 0 or sample_size_mb <= 0:
+            logger.warning(f"Invalid size parameters: model={model_size_mb}, sample={sample_size_mb}")
+            return 1
+        
+        # BUGFIX: Validate device_id
+        if device_id < 0 or device_id >= self.device_count:
+            logger.warning(f"Invalid device_id {device_id}, using device 0")
+            device_id = 0
 
         mem_info = self.get_memory_info(device_id)
+        
+        # BUGFIX: Check for errors in mem_info
+        if 'error' in mem_info:
+            logger.error(f"Cannot estimate batch size: {mem_info['error']}")
+            return 1
+        
         available_gb = mem_info["free_gb"]
 
         # Reserve 20% for safety and gradients
@@ -131,6 +160,7 @@ class CUDAValidator:
         available_for_data = usable_mb - model_size_mb
 
         if available_for_data <= 0:
+            logger.warning(f"Insufficient memory for model. Available: {usable_mb}MB, Model: {model_size_mb}MB")
             return 1
 
         # Calculate batch size (multiply by 2 for gradients)

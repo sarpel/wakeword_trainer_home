@@ -56,24 +56,36 @@ def check_cuda():
             print(f"cuDNN Version: {cudnn_version}")
             print(f"GPU Count: {device_count}")
 
+            # BUGFIX: Validate device_count is positive
+            if device_count <= 0:
+                print_status("CUDA Available", False, "No GPU devices found")
+                return False
+
             for i in range(device_count):
-                props = torch.cuda.get_device_properties(i)
-                print(f"\nGPU {i}: {props.name}")
-                print(f"  Compute Capability: {props.major}.{props.minor}")
-                print(f"  Total Memory: {props.total_memory / (1024**3):.2f} GB")
+                try:
+                    props = torch.cuda.get_device_properties(i)
+                    print(f"\nGPU {i}: {props.name}")
+                    print(f"  Compute Capability: {props.major}.{props.minor}")
+                    print(f"  Total Memory: {props.total_memory / (1024**3):.2f} GB")
+                except Exception as e:
+                    print(f"\nGPU {i}: Error getting properties - {e}")
+                    continue
 
             print_status("CUDA Available", True, f"{device_count} GPU(s) detected")
 
             # Check compute capability
-            props = torch.cuda.get_device_properties(0)
-            compute_ok = (props.major >= 6)
-            print_status(
-                "Compute Capability >= 6.0",
-                compute_ok,
-                f"Found {props.major}.{props.minor}"
-            )
-
-            return cuda_available and compute_ok
+            try:
+                props = torch.cuda.get_device_properties(0)
+                compute_ok = (props.major >= 6)
+                print_status(
+                    "Compute Capability >= 6.0",
+                    compute_ok,
+                    f"Found {props.major}.{props.minor}"
+                )
+                return cuda_available and compute_ok
+            except Exception as e:
+                print_status("Compute Capability >= 6.0", False, f"Error: {e}")
+                return False
         else:
             print_status("CUDA Available", False, "No CUDA devices found")
             print("\n⚠️  GPU is MANDATORY for this platform!")
@@ -208,6 +220,11 @@ def check_cuda_memory():
     try:
         import torch
         if torch.cuda.is_available():
+            # BUGFIX: Validate device count before accessing
+            if torch.cuda.device_count() == 0:
+                print_status("GPU Memory Check", False, "No CUDA devices available")
+                return False
+                
             device = torch.device("cuda:0")
             props = torch.cuda.get_device_properties(0)
             total_memory = props.total_memory / (1024**3)
@@ -222,13 +239,21 @@ def check_cuda_memory():
                 f"{total_memory:.2f} GB" + (" - May need small batch sizes" if total_memory < 8 else "")
             )
 
-            # Test allocation
+            # Test allocation with error handling
             try:
                 test_tensor = torch.randn(1000, 1000, device=device)
                 del test_tensor
                 torch.cuda.empty_cache()
                 print_status("GPU Memory Allocation Test", True)
                 return sufficient
+            except RuntimeError as e:
+                # BUGFIX: Handle OOM during test
+                if "out of memory" in str(e).lower():
+                    print_status("GPU Memory Allocation Test", False, "Out of memory during test allocation")
+                    torch.cuda.empty_cache()
+                else:
+                    print_status("GPU Memory Allocation Test", False, str(e))
+                return False
             except Exception as e:
                 print_status("GPU Memory Allocation Test", False, str(e))
                 return False

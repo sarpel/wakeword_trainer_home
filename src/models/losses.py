@@ -32,6 +32,10 @@ class LabelSmoothingCrossEntropy(nn.Module):
             reduction: Reduction method ('none', 'mean', 'sum')
         """
         super().__init__()
+        # BUGFIX: Validate smoothing is in valid range
+        if not 0.0 <= smoothing <= 1.0:
+            raise ValueError(f"Label smoothing must be in [0, 1], got {smoothing}")
+        
         self.smoothing = smoothing
         self.weight = weight
         self.reduction = reduction
@@ -48,15 +52,33 @@ class LabelSmoothingCrossEntropy(nn.Module):
         Returns:
             Loss value
         """
+        # BUGFIX: Validate input shapes
+        if pred.dim() != 2:
+            raise ValueError(f"Predictions must be 2D (batch, num_classes), got shape {pred.shape}")
+        
+        if target.dim() != 1:
+            raise ValueError(f"Targets must be 1D (batch,), got shape {target.shape}")
+        
+        if pred.size(0) != target.size(0):
+            raise ValueError(f"Batch size mismatch: pred={pred.size(0)}, target={target.size(0)}")
+        
         # Get log probabilities
         log_probs = F.log_softmax(pred, dim=-1)
 
         # One-hot encode targets
         num_classes = pred.size(-1)
+        
+        # BUGFIX: Check for out of range targets
+        if (target < 0).any() or (target >= num_classes).any():
+            raise ValueError(f"Target values must be in [0, {num_classes-1}], got min={target.min()}, max={target.max()}")
+        
         target_one_hot = F.one_hot(target, num_classes).float()
 
-        # Apply label smoothing
-        smooth_target = target_one_hot * self.confidence + (1 - target_one_hot) * (self.smoothing / (num_classes - 1))
+        # BUGFIX: Prevent division by zero when num_classes == 1
+        if num_classes > 1:
+            smooth_target = target_one_hot * self.confidence + (1 - target_one_hot) * (self.smoothing / (num_classes - 1))
+        else:
+            smooth_target = target_one_hot * self.confidence
 
         # Calculate loss
         loss = -torch.sum(smooth_target * log_probs, dim=-1)
@@ -100,6 +122,12 @@ class FocalLoss(nn.Module):
             reduction: Reduction method ('none', 'mean', 'sum')
         """
         super().__init__()
+        # BUGFIX: Validate parameters
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError(f"Alpha must be in [0, 1], got {alpha}")
+        if gamma < 0:
+            raise ValueError(f"Gamma must be non-negative, got {gamma}")
+            
         self.alpha = alpha
         self.gamma = gamma
         self.weight = weight
@@ -116,12 +144,31 @@ class FocalLoss(nn.Module):
         Returns:
             Loss value
         """
+        # BUGFIX: Validate input shapes
+        if pred.dim() != 2:
+            raise ValueError(f"Predictions must be 2D (batch, num_classes), got shape {pred.shape}")
+        
+        if target.dim() != 1:
+            raise ValueError(f"Targets must be 1D (batch,), got shape {target.shape}")
+        
+        if pred.size(0) != target.size(0):
+            raise ValueError(f"Batch size mismatch: pred={pred.size(0)}, target={target.size(0)}")
+        
+        num_classes = pred.size(-1)
+        
+        # BUGFIX: Check for out of range targets
+        if (target < 0).any() or (target >= num_classes).any():
+            raise ValueError(f"Target values must be in [0, {num_classes-1}]")
+        
         # Get probabilities
         probs = F.softmax(pred, dim=-1)
 
         # Get class probabilities
-        target_one_hot = F.one_hot(target, pred.size(-1)).float()
+        target_one_hot = F.one_hot(target, num_classes).float()
         pt = torch.sum(probs * target_one_hot, dim=-1)
+        
+        # BUGFIX: Clamp pt to prevent log(0) issues
+        pt = torch.clamp(pt, min=1e-7, max=1.0 - 1e-7)
 
         # Calculate focal term: (1 - pt)^gamma
         focal_weight = (1 - pt) ** self.gamma
