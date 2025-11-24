@@ -37,6 +37,10 @@ class WarmupScheduler:
             warmup_epochs: Number of warmup epochs
             base_scheduler: Base scheduler to use after warmup
         """
+        # BUGFIX: Validate warmup_epochs is non-negative
+        if warmup_epochs < 0:
+            raise ValueError(f"warmup_epochs must be non-negative, got {warmup_epochs}")
+            
         self.optimizer = optimizer
         self.warmup_epochs = warmup_epochs
         self.base_scheduler = base_scheduler
@@ -44,6 +48,10 @@ class WarmupScheduler:
 
         # Store initial learning rates
         self.base_lrs = [group['lr'] for group in optimizer.param_groups]
+        
+        # BUGFIX: Validate all learning rates are positive
+        if any(lr <= 0 for lr in self.base_lrs):
+            raise ValueError(f"All learning rates must be positive, got {self.base_lrs}")
 
     def step(self, epoch: Optional[int] = None, metrics: Optional[float] = None):
         """
@@ -135,8 +143,21 @@ def create_optimizer(
         PyTorch optimizer
 
     Raises:
-        ValueError: If optimizer_name is not recognized
+        ValueError: If optimizer_name is not recognized or parameters are invalid
     """
+    # BUGFIX: Validate parameters
+    if learning_rate <= 0:
+        raise ValueError(f"Learning rate must be positive, got {learning_rate}")
+    
+    if weight_decay < 0:
+        raise ValueError(f"Weight decay must be non-negative, got {weight_decay}")
+    
+    if not 0 <= momentum <= 1:
+        raise ValueError(f"Momentum must be in [0, 1], got {momentum}")
+    
+    if not all(0 <= beta <= 1 for beta in betas):
+        raise ValueError(f"Betas must be in [0, 1], got {betas}")
+    
     optimizer_name = optimizer_name.lower()
 
     # Get model parameters
@@ -219,8 +240,33 @@ def create_scheduler(
         Learning rate scheduler (or None if scheduler_name is 'none')
 
     Raises:
-        ValueError: If scheduler_name is not recognized
+        ValueError: If scheduler_name is not recognized or parameters are invalid
     """
+    # BUGFIX: Validate parameters
+    if epochs <= 0:
+        raise ValueError(f"Epochs must be positive, got {epochs}")
+    
+    if warmup_epochs < 0:
+        raise ValueError(f"Warmup epochs must be non-negative, got {warmup_epochs}")
+    
+    if warmup_epochs >= epochs:
+        raise ValueError(f"Warmup epochs ({warmup_epochs}) must be less than total epochs ({epochs})")
+    
+    if step_size <= 0:
+        raise ValueError(f"Step size must be positive, got {step_size}")
+    
+    if not 0 < gamma <= 1:
+        raise ValueError(f"Gamma must be in (0, 1], got {gamma}")
+    
+    if patience <= 0:
+        raise ValueError(f"Patience must be positive, got {patience}")
+    
+    if not 0 < factor < 1:
+        raise ValueError(f"Factor must be in (0, 1), got {factor}")
+    
+    if min_lr < 0:
+        raise ValueError(f"Minimum LR must be non-negative, got {min_lr}")
+    
     scheduler_name = scheduler_name.lower()
 
     if scheduler_name == 'none':
@@ -235,6 +281,10 @@ def create_scheduler(
     if scheduler_name == 'cosine':
         # Cosine annealing
         T_max = epochs - warmup_epochs if warmup_epochs > 0 else epochs
+        # BUGFIX: Ensure T_max is positive
+        if T_max <= 0:
+            raise ValueError(f"T_max must be positive, got {T_max}")
+        
         base_scheduler = CosineAnnealingLR(
             optimizer,
             T_max=T_max,
@@ -388,6 +438,13 @@ def clip_gradients(
     Returns:
         Total gradient norm before clipping
     """
+    # BUGFIX: Validate parameters
+    if max_norm <= 0:
+        raise ValueError(f"max_norm must be positive, got {max_norm}")
+    
+    if norm_type <= 0:
+        raise ValueError(f"norm_type must be positive, got {norm_type}")
+    
     total_norm = torch.nn.utils.clip_grad_norm_(
         model.parameters(),
         max_norm=max_norm,
