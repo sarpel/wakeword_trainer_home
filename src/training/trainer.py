@@ -225,7 +225,8 @@ class Trainer:
                 logger.exception(f"Unexpected error at batch {batch_idx}: {e}")
                 continue
 
-        avg_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
+        # BUGFIX: Prevent division by zero if loader is empty (use max for safety)
+        avg_loss = epoch_loss / max(num_batches, 1)
         train_metrics = self.train_metrics_tracker.compute()
 
         logger.info(f"Epoch {epoch+1} [Train]: Loss={avg_loss:.4f}, {train_metrics}")
@@ -305,7 +306,8 @@ class Trainer:
                     logger.exception(f"Unexpected error during validation at batch {batch_idx}: {e}")
                     continue
 
-        avg_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
+        # BUGFIX: Prevent division by zero if loader is empty (use max for safety)
+        avg_loss = epoch_loss / max(num_batches, 1)
         val_metrics = self.val_metrics_tracker.compute()
 
         logger.info(f"Epoch {epoch+1} [Val]: Loss={avg_loss:.4f}, {val_metrics}")

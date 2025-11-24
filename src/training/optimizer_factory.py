@@ -281,9 +281,7 @@ def create_scheduler(
     if scheduler_name == 'cosine':
         # Cosine annealing
         T_max = epochs - warmup_epochs if warmup_epochs > 0 else epochs
-        # BUGFIX: Ensure T_max is positive
-        if T_max <= 0:
-            raise ValueError(f"T_max must be positive, got {T_max}")
+        # Note: T_max > 0 is guaranteed by validation above (warmup_epochs < epochs)
         
         base_scheduler = CosineAnnealingLR(
             optimizer,

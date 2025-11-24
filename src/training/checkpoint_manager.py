@@ -41,6 +41,10 @@ class CheckpointManager:
     Manage model checkpoints
     Load, save, list, and clean up checkpoints
     """
+    
+    # Minimum checkpoint file size to be considered valid (1KB)
+    # Checkpoints smaller than this are likely corrupt
+    MIN_CHECKPOINT_SIZE = 1024
 
     def __init__(self, checkpoint_dir: Path):
         """
@@ -70,9 +74,9 @@ class CheckpointManager:
 
         for checkpoint_path in self.checkpoint_dir.glob("*.pt"):
             try:
-                # BUGFIX: Skip files that are too small (likely corrupt)
-                if checkpoint_path.stat().st_size < 1024:  # Less than 1KB
-                    logger.warning(f"Skipping suspicious checkpoint (too small): {checkpoint_path}")
+                # BUGFIX: Skip files that are too small (likely corrupt) - using class constant
+                if checkpoint_path.stat().st_size < self.MIN_CHECKPOINT_SIZE:
+                    logger.warning(f"Skipping suspicious checkpoint (< {self.MIN_CHECKPOINT_SIZE} bytes): {checkpoint_path}")
                     continue
                 
                 # Load checkpoint metadata

@@ -72,13 +72,16 @@ class LabelSmoothingCrossEntropy(nn.Module):
         if (target < 0).any() or (target >= num_classes).any():
             raise ValueError(f"Target values must be in [0, {num_classes-1}], got min={target.min()}, max={target.max()}")
         
+        # BUGFIX: Single class case - label smoothing not meaningful
+        if num_classes == 1:
+            logger.warning("Label smoothing with single class is meaningless. Consider using plain CE loss.")
+            # Return standard cross-entropy for single class
+            return F.cross_entropy(pred, target, weight=self.weight, reduction=self.reduction)
+        
         target_one_hot = F.one_hot(target, num_classes).float()
 
-        # BUGFIX: Prevent division by zero when num_classes == 1
-        if num_classes > 1:
-            smooth_target = target_one_hot * self.confidence + (1 - target_one_hot) * (self.smoothing / (num_classes - 1))
-        else:
-            smooth_target = target_one_hot * self.confidence
+        # Apply label smoothing (safe now that num_classes > 1)
+        smooth_target = target_one_hot * self.confidence + (1 - target_one_hot) * (self.smoothing / (num_classes - 1))
 
         # Calculate loss
         loss = -torch.sum(smooth_target * log_probs, dim=-1)
@@ -104,6 +107,9 @@ class FocalLoss(nn.Module):
     Focal Loss for addressing class imbalance
     Focuses on hard examples by down-weighting easy examples
     """
+    
+    # Epsilon to prevent log(0) and other numerical instabilities
+    EPS = 1e-7
 
     def __init__(
         self,
@@ -167,8 +173,8 @@ class FocalLoss(nn.Module):
         target_one_hot = F.one_hot(target, num_classes).float()
         pt = torch.sum(probs * target_one_hot, dim=-1)
         
-        # BUGFIX: Clamp pt to prevent log(0) issues
-        pt = torch.clamp(pt, min=1e-7, max=1.0 - 1e-7)
+        # BUGFIX: Clamp pt to prevent log(0) issues using class constant
+        pt = torch.clamp(pt, min=self.EPS, max=1.0 - self.EPS)
 
         # Calculate focal term: (1 - pt)^gamma
         focal_weight = (1 - pt) ** self.gamma
